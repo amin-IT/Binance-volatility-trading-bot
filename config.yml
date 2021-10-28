@@ -4,7 +4,7 @@ script_options:
   # Setting this to False will use REAL funds, use at your own risk
   # I don't advice to change TEST_MODE while the bot is running. I haven't tested what it does
   # when the bot changes from test mode to use real money all of a sudden or vice versa
-  TEST_MODE: True
+  TEST_MODE: False
   LOG_TRADES: True
   LOG_FILE: 'trades.txt'
   DEBUG: False
@@ -23,7 +23,7 @@ trading_options:
   # Total amount per trade (your base currency balance must be at least MAX_COINS * QUANTITY)
   # Binance uses a minimum of 10 USDT per trade, add a bit extra to enable selling if the price drops.
   # Recommended: no less than 12 USDT. Suggested: 15 or more.
-  QUANTITY: 250
+  QUANTITY: 15
 
   # List of trading pairs to exclude
   # by default we're excluding the most popular fiat pairs
@@ -43,7 +43,7 @@ trading_options:
    # Set this to zero if you want the bot to sell all the(possibly losing at the moment) coins at TP.
    # If you want to avoid losses, then set your STOP_LOSS high enough
    # Set this to -1 if you want the bot to terminate automatically when all the coins are sold
-  MAX_COINS: 18
+  MAX_COINS: 10
 
   # the amount of time in MINUTES to calculate the difference from the current price
   TIME_DIFFERENCE: 1
@@ -55,7 +55,7 @@ trading_options:
   CHANGE_IN_PRICE: 90
 
   # define in % when to sell a coin that's not making a profit, this has to be NEGATIVE number
-  STOP_LOSS: -90
+  STOP_LOSS: -3
 
   # define in % when to take profit on a profitable coin
   TAKE_PROFIT: 1.0
