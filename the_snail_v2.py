@@ -88,7 +88,7 @@ parsed_config = load_config(config_file)
 
 # Load trading vars
 PAIR_WITH = parsed_config['trading_options']['PAIR_WITH']
-EX_PAIRS = parsed_config['trading_options']['EX_PAIRS']
+EX_PAIRS = parsed_config['trading_options']['FIATS']
 TEST_MODE = parsed_config['script_options']['TEST_MODE']
 TAKE_PROFIT = parsed_config['trading_options']['TAKE_PROFIT']
 DISCORD_WEBHOOK = load_discord_creds(parsed_creds)
@@ -114,7 +114,7 @@ else:
 
 # System Settings
 BVT = False
-OLORIN = True  # if not using Olorin Sledge Fork set to False
+OLORIN = False  # if not using Olorin Sledge Fork set to False
 if OLORIN:
 	signal_file_type = '.buy'
 else:
@@ -123,7 +123,7 @@ else:
 # if using Windows OS set to True, else set to False
 WINDOWS = True
 # send message to discord
-DISCORD = True
+DISCORD = False
 
 # Strategy Settings
 LIMIT = 4
