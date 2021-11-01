@@ -26,14 +26,18 @@ You can follow the [Binance volatility bot guide](https://www.cryptomaton.org/20
 ## Usage
 Please checkout our wiki pages:
 
+- [Step by Step](https://amin-it-consulting.com/binance-trading-bot-all-coins)
 - [Setup Guide](https://github.com/CyberPunkMetalHead/Binance-volatility-trading-bot/wiki/Setup-Guide)
 - [Bot Strategy Guide](https://github.com/CyberPunkMetalHead/Binance-volatility-trading-bot/wiki/Bot-Strategy-Guide)
 - [Configuration Guide](https://github.com/CyberPunkMetalHead/Binance-volatility-trading-bot/wiki/Configuration)
 
+## Discord
+- https://discord.gg/7h2NRUayRw
+
 ## Troubleshooting
 
 1. Read the [FAQ](FAQ.md)
-2. Open an issue / check us out on `#troubleshooting` at [Discord](https://discord.gg/buD27Dmvu3) 🚀 
+2. Open an issue / check us out on `#troubleshooting` at [Discord](https://discord.gg/7h2NRUayRw)🚀 
     - Do not spam, do not berate, we are all humans like you, this is an open source project, not a full time job. 
 
 ## 💥 Disclaimer
