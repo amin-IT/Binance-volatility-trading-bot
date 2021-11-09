@@ -483,8 +483,8 @@ def sell_all(msgreason, session_tspl_ovr = False):
 
     # display final info to screen
     last_price = get_price()
-    discordmsg = balance_report(last_price)
-    msg_discord(discordmsg)
+    #discordmsg = balance_report(last_price)
+    #msg_discord(discordmsg)
 
 def sell_all_coins(msg=''):
   global session_tspl_ovr
