@@ -34,7 +34,6 @@ Set True / False for compatibility
 DISCORD
 send message to Discord - Set True / False
 
-
 CONFIG.YML SETTINGS
 CHANGE_IN_PRICE: 100 REQUIRED
 Do NOT use pausebotmod as it will prevent the_snail from buying - The Snail buys the dips
@@ -98,7 +97,6 @@ access_key, secret_key = load_correct_creds(parsed_creds)
 client = Client(access_key, secret_key)
 
 
-
 # If True, an updated list of coins will be generated from the site - http://edgesforledges.com/watchlists/binance.
 # If False, then the list you create in TICKERS_LIST = 'tickers.txt' will be used.
 CREATE_TICKER_LIST = False
@@ -110,7 +108,7 @@ ticker_type = 'all'
 if CREATE_TICKER_LIST:
 	TICKERS_LIST = 'tickers_all_USDT.txt'
 else:
-	TICKERS_LIST = 'tickers_all_USDT.txt'
+	TICKERS_LIST = 'tickers.txt'
 
 # System Settings
 BVT = False
@@ -120,8 +118,6 @@ if OLORIN:
 else:
 	signal_file_type = '.exs'
 
-# if using Windows OS set to True, else set to False
-WINDOWS = True
 # send message to discord
 DISCORD = False
 
@@ -130,11 +126,12 @@ LIMIT = 4
 INTERVAL = '1d'
 profit_min = 15
 profit_max = 100  # only required if you want to limit max profit
-percent_below = 0.6  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
+percent_below = 0.5  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
 MOVEMENT = True
 
 # Display Setttings
-all_info = False
+all_info = True
+block_info = False
 
 
 class TextColors:
@@ -149,56 +146,52 @@ class TextColors:
 	UNDERLINE = '\033[4m'
 	END = '\033[0m'
 	ITALICS = '\033[3m'
+	TCR = '\033[91m'
+	TCG = '\033[32m'
+	TCD = '\033[39m'
 
+def msg_discord(msg):
 
-#def msg_discord(msg):
+	message = msg + '\n\n'
 
-	#message = msg + '\n\n'
-
-	#mUrl = ""
-	#data = {"content": message}
-	#response = requests.post(mUrl, json=data)
+	mUrl = "https://discordapp.com/api/webhooks/"+DISCORD_WEBHOOK
+	data = {"content": message}
+	response = requests.post(mUrl, json=data)
 
 
 def get_price(client_api):
- try:
-		initial_price = {}
-		tickers = [line.strip() for line in open(TICKERS_LIST)]
-		prices = client_api.get_all_tickers()
+	initial_price = {}
+	tickers = [line.strip() for line in open(TICKERS_LIST)]
+	prices = client_api.get_all_tickers()
 
-		for coin in prices:
-			for item in tickers:
-				if item + PAIR_WITH == coin['symbol'] and all(item + PAIR_WITH not in coin['symbol'] for item in EX_PAIRS):
-					initial_price[coin['symbol']] = {'symbol': coin['symbol'],
-													 'price': coin['price'],
-													 'time': datetime.now(),
-													 'price_list': [],
-													 'change_price': 0.0,
-													 'cov': 0.0}
+	for coin in prices:
+		for item in tickers:
+			if item + PAIR_WITH == coin['symbol'] and all(item + PAIR_WITH not in coin['symbol'] for item in EX_PAIRS):
+				initial_price[coin['symbol']] = {'symbol': coin['symbol'],
+												 'price': coin['price'],
+												 'time': datetime.now(),
+												 'price_list': [],
+												 'change_price': 0.0,
+												 'cov': 0.0}
+	return initial_price
 
-		return initial_price
- except Exception as e:
-  print(e)
 
 async def create_urls(ticker_list, interval, limit) -> dict:
- try:
-		coins_urls = {}
-		for coin in ticker_list:
-			if type(coin) == dict:
-				if all(item + PAIR_WITH not in coin['symbol'] for item in EX_PAIRS):
-					coins_urls[coin['symbol']] = {'symbol': coin['symbol'],
-												  'url': f"https://api.binance.com/api/v1/klines?symbol="
-														 f"{coin['symbol']}&interval={interval}&limit={limit}"}
-			else:
-				coins_urls[coin] = {'symbol': coin,
-									'url': f"https://api.binance.com/api/v1/klines?symbol={coin}&interval={interval}&limit={limit}"}
+	coins_urls = {}
+	for coin in ticker_list:
+		if type(coin) == dict:
+			if all(item + PAIR_WITH not in coin['symbol'] for item in EX_PAIRS):
+				coins_urls[coin['symbol']] = {'symbol': coin['symbol'],
+											  'url': f"https://api.binance.com/api/v1/klines?symbol="
+													 f"{coin['symbol']}&interval={interval}&limit={limit}"}
+		else:
+			coins_urls[coin] = {'symbol': coin,
+								'url': f"https://api.binance.com/api/v1/klines?symbol={coin}&interval={interval}&limit={limit}"}
 
-		return coins_urls
- except Exception as e:
-  print(e)
+	return coins_urls
+
 
 async def get(session: aiohttp.ClientSession, url) -> dict:
-
 	data = {}
 	symbol = re.findall(r'=\w+', url)[0][1:]
 	try:
@@ -212,30 +205,30 @@ async def get(session: aiohttp.ClientSession, url) -> dict:
 
 
 async def get_historical_data(ticker_list, interval, limit):
- try:
-		urls = await create_urls(ticker_list=ticker_list, interval=interval, limit=limit)
-		if WINDOWS:
-			asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-		async with aiohttp.ClientSession() as session:
-			tasks = []
-			for url in urls:
-				link = urls[url]['url']
-				tasks.append(get(session=session, url=link))
-			response = await asyncio.gather(*tasks, return_exceptions=True)
-			return response
- except Exception as e:
-  print(e)
+	urls = await create_urls(ticker_list=ticker_list, interval=interval, limit=limit)
+	if os.name == 'nt':
+        	# only need this line for Windows based systems
+		asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+	async with aiohttp.ClientSession() as session:
+		tasks = []
+		for url in urls:
+			link = urls[url]['url']
+			tasks.append(get(session=session, url=link))
+		response = await asyncio.gather(*tasks, return_exceptions=True)
+		return response
+
 
 def get_prices_high_low(list_coins, interval, limit):
- try:
-		if WINDOWS:
-			asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-		hist_data = asyncio.run(get_historical_data(ticker_list=list_coins, interval=interval, limit=limit))
-		prices_low_high = {}
-		for item in hist_data:
-			coin_symbol = item['symbol']
-			h_p = []
-			l_p = []
+	if os.name == 'nt':
+	        # only need this line for Windows based systems
+		asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+	hist_data = asyncio.run(get_historical_data(ticker_list=list_coins, interval=interval, limit=limit))
+	prices_low_high = {}
+	for item in hist_data:
+		coin_symbol = item['symbol']
+		h_p = []
+		l_p = []
+		try:
 			for i in item['data']:
 				close_time = i[0]
 				open_price = float(i[1])
@@ -247,15 +240,15 @@ def get_prices_high_low(list_coins, interval, limit):
 				h_p.append(high_price)
 				l_p.append(low_price)
 			prices_low_high[coin_symbol] = {'symbol': coin_symbol, 'high_price': h_p, 'low_price': l_p, 'current_potential': 0.0}
+		except Exception as e:
+			print(f'Ignoring {coin_symbol} data issue')
+			continue
+	return prices_low_high
 
-		return prices_low_high
- except Exception as e:
-  print(e)
 
 def do_work():
- try:
-		while True:
-
+	while True:
+		try:
 			init_price = get_price(client)
 			coins = get_prices_high_low(init_price, INTERVAL, LIMIT)
 			print(f'{TextColors.TURQUOISE}The Snail is checking for potential profit and buy signals{TextColors.DEFAULT}')
@@ -267,10 +260,12 @@ def do_work():
 
 			if TEST_MODE:
 				coin_path = 'test_coins_bought.json'
-			elif BVT:
-				coin_path = 'coins_bought.json'
 			else:
-				coin_path = 'live_coins_bought.json'
+				if BVT:
+					coin_path = 'coins_bought.json'
+				else:
+					coin_path = 'live_coins_bought.json'
+
 			if os.path.isfile(coin_path) and os.stat(coin_path).st_size != 0:
 				with open(coin_path) as file:
 					held_coins_list = json.load(file)
@@ -293,14 +288,31 @@ def do_work():
 					current_potential = ((high_price / last_price) * 100) - 100
 					coins[coin]['current_potential'] = current_potential
 					movement = (low_price / range)
-					print(f'{coin} {potential:.2f}% {movement:.2f}%')
+					print(f'{coin} {current_potential:.2f}% {movement:.2f}%')
 
 					if MOVEMENT:
-						if profit_min < current_potential < profit_max and last_price < buy_below and movement >= TAKE_PROFIT and coin not in held_coins_list:
+						if profit_min < current_potential < profit_max and last_price < buy_below and movement >= (TAKE_PROFIT + 0.2) and coin not in held_coins_list:
 							current_potential_list.append(coins[coin])
 					else:
 						if profit_min < current_potential < profit_max and last_price < buy_below and coin not in held_coins_list:
 							current_potential_list.append(coins[coin])
+
+					if block_info:
+						print(f'\nPrice:            ${last_price:.3f}\n'
+							f'High:             ${high_price:.3f}\n'
+							f'Low:              ${low_price:.3f}\n'
+							# f'Plan: TP {TP}% TTP {TTP}%\n'
+							f'Day Max Range:    ${range:.3f}\n'
+							f'Current Range:    ${current_range:.3f} \n'
+							# f'Daily Range:      ${range:.3f}\n'
+							# f'Current Range     ${current_range:.3f} \n' 
+							# f'Potential profit before safety: {potential:.0f}%\n'
+							f'Buy above:        ${buy_above:.3f}\n'
+							f'Buy Below:        ${buy_below:.3f}\n'
+							f'Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}'
+							# f'Max Profit {max_potential:.2f}%\n'
+							# f'Min Profit {min_potential:.2f}%\n'
+						)
 
 			if current_potential_list:
 				# print(current_potential_list)
@@ -313,6 +325,7 @@ def do_work():
 					macd1 = exchange.fetch_ohlcv(coin, timeframe='1m', limit=36)
 					macd5 = exchange.fetch_ohlcv(coin, timeframe='5m', limit=36)
 					macd15 = exchange.fetch_ohlcv(coin, timeframe='15m', limit=36)
+					macd4h = exchange.fetch_ohlcv(coin, timeframe='15m', limit=36)
 					try:
 						macd1day = exchange.fetch_ohlcv(coin, timeframe='1d', limit=36)
 					except Exception as e:
@@ -323,8 +336,10 @@ def do_work():
 					df1 = pd.DataFrame(macd1, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
 					df5 = pd.DataFrame(macd5, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
 					df15 = pd.DataFrame(macd15, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+					df4h = pd.DataFrame(macd4h, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
 					df1day = pd.DataFrame(macd1day, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
 					dfbtc = pd.DataFrame(macdbtc, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+
 
 					macd1 = df1.ta.macd(fast=12, slow=26)
 					macd5 = df5.ta.macd(fast=12, slow=26)
@@ -342,19 +357,17 @@ def do_work():
 						continue
 					get_histbtc = macdbtc.iloc[35, 1]
 
+
 					if all_info:
 						if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist1day >= 0 and get_histbtc >= 0:
-							print(f'MACD HIST {coin} {current_potential:2f}% {TextColors.SELL_PROFIT}{get_hist1} {get_hist5} {get_hist15} {get_hist1day} {get_histbtc}{TextColors.DEFAULT}')
+							print(f'MACD HIST {coin} {current_potential:.0f}% {TextColors.SELL_PROFIT}{get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist1day:.4f} {get_histbtc:.4f} ')
 						else:
-							print(f'MACD HIST {coin} {current_potential:2f}% {get_hist1} {get_hist5} {get_hist15} {get_hist1day} {get_histbtc}')
+							print(f'MACD HIST {coin} {current_potential:.0f}% {get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist1day:.4f} {get_histbtc:.4f}')
 
 					if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist1day >= 0 and get_histbtc >= 0:
-						try:
-							# Add to coins for Snail to scan
-							print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}\n')
-							macd_list.append(coins[coin])
-						except Exception as e:
-							print(e)
+						# Add to coins for Snail to scan
+						print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}\n')
+						macd_list.append(coins[coin])
 					# else:
 					#     print(f'Do NOT buy {coin}')
 
@@ -379,19 +392,19 @@ def do_work():
 
 						if all_info:
 							print(f'\nPrice:            ${last_price:.3f}\n'
-							  	f'High:             ${high_price:.3f}\n'
-							  	# f'Plan: TP {TP}% TTP {TTP}%\n'
-							  	f'Day Max Range:    ${range:.3f}\n'
-							  	f'Current Range:    ${current_range:.3f} \n'
-							  	# f'Daily Range:      ${range:.3f}\n'
-							  	# f'Current Range     ${current_range:.3f} \n'
-							  	# f'Potential profit before safety: {potential:.0f}%\n'
-							  	# f'Buy above:        ${buy_above:.3f}\n'
-							  	f'Buy Below:        ${buy_below:.3f}\n'
-							  	f'Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}'
-							  	# f'Max Profit {max_potential:.2f}%\n'
-							  	# f'Min Profit {min_potential:.2f}%\n'
-							  	)
+								  f'High:             ${high_price:.3f}\n'
+								  # f'Plan: TP {TP}% TTP {TTP}%\n'
+								  f'Day Max Range:    ${range:.3f}\n'
+								  f'Current Range:    ${current_range:.3f} \n'
+								  # f'Daily Range:      ${range:.3f}\n'
+								  # f'Current Range     ${current_range:.3f} \n'
+								  # f'Potential profit before safety: {potential:.0f}%\n'
+								  # f'Buy above:        ${buy_above:.3f}\n'
+								  f'Buy Below:        ${buy_below:.3f}\n'
+								  f'Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}'
+								  # f'Max Profit {max_potential:.2f}%\n'
+								  # f'Min Profit {min_potential:.2f}%\n'
+								  )
 						# print(f'Adding {TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} to buy list')
 
 						# add to signal
@@ -402,10 +415,14 @@ def do_work():
 				# print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} may not be profitable at this time')
 				snail_coins = len(current_potential_list)
 				macd_coins = len(macd_list)
-				snail_discord = f'Bot found {snail_coins} coins with potential and MACD approved {macd_coins}'
-				#if DISCORD:
-					#msg_discord(snail_discord)
+				snail_discord = f'Snail found {snail_coins} coins and MACD approved {macd_coins}'
+				if DISCORD:
+					msg_discord(snail_discord)
 				print(f'{TextColors.TURQUOISE}Snail found {snail_coins} coins and MACD approved {macd_coins} coins. L: {LIMIT}days Min: {profit_min}% Risk: {percent_below * 100}% {TextColors.DEFAULT}')
-				time.sleep(180)
- except Exception as e:
-  print(e)
+			time.sleep(180)
+		except Exception as e:
+			print(f'The Snail: Exception do_work() 1: {e}')
+			time.sleep(60)
+			continue
+		except KeyboardInterrupt as ki:
+			continue
