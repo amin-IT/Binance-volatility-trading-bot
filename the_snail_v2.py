@@ -1,7 +1,6 @@
 """
-The Snail v 2
+The Snail v 2.2
 "Buy the dips! ... then wait"
-
 STRATEGY
 1. Selects coins that are X% (percent_below) below their X day (LIMIT) maximum
 2. ** NEW ** Finds movement (MOVEMENT) range over X Days
@@ -9,13 +8,14 @@ STRATEGY
 3. Check coins are not already owned
 4. Uses MACD to check if coins are currently on an uptrend
 5. Adds coins that pass all above tests to Signal file for the Bot to buy (ordered by Potential Profit from High to Low)
-
 * MOVEMENT
   Looks at the fluctuation in price over LIMIT days and compares to your TAKE_PROFIT settings.
   i.e. if your TAKE_PROFIT is 3%, but the movement is only 1%, then you wont hit TP and will be left holding the coin
   This can be turned off if you want.
-
-
+* ATR MOVEMENT
+calculates Average True Range Percent (ATRP) as an alternative to the default movement
+* DROP_CALCULATION
+Potential calculation as drop in % from high-price of X-day. Default 'False' to align with scoobie's version
 STRATEGY SETTINGS
 LIMIT = 4
 INTERVAL = '1d'
@@ -23,36 +23,28 @@ profit_min = 15
 profit_max = 100  # only required if you want to limit max profit
 percent_below = 0.6  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
 MOVEMENT = True #
-
 OTHER SETTINGS
 BVT or OLORIN Fork.
 Set True / False for compatibility
-
 WINDOWS (WINDOWS OS)
 Set True / False for compatibility
-
 DISCORD
 send message to Discord - Set True / False
-
 CONFIG.YML SETTINGS
 CHANGE_IN_PRICE: 100 REQUIRED
 Do NOT use pausebotmod as it will prevent the_snail from buying - The Snail buys the dips
-
 Developed by scoobie
 Thanks to
 @vyacheslav for optimising the code with async and adding list sorting,
 @Kevin.Butters for the meticulous testing and reporting,
 @OlorinSledge for the coding advice and a great fork
-
 DISCLAIMER
 CHECK YOU HAVE ALL THE REQUIRED IMPORTS INSTALLED
 Developed for OlorinSledge fork - no support for any others as I don't use them.
 Troubleshooting and help - please use the #troubleshooting channel
 Settings - the settings in this file are what I currently use, please don't DM me for the 'best' settings - for me, these are the best so far.
 There's a lot of options to adjust the strategy, test them out and share your results in #bot-strategies so others can learn from them too
-
 Hope the Snail makes you rich!
-
 """
 
 import os
@@ -126,8 +118,12 @@ LIMIT = 4
 INTERVAL = '1d'
 profit_min = 15
 profit_max = 100  # only required if you want to limit max profit
-percent_below = 0.5  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
-MOVEMENT = True
+percent_below = 0.6  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
+# movement can be either:
+#  "MOVEMENT" for original movement calc
+#  "ATR_MOVEMENT" for Average True Range Percentage calc
+MOVEMENT = 'MOVEMENT'
+DROP_CALCULATION = False
 
 # Display Setttings
 all_info = True
@@ -228,6 +224,7 @@ def get_prices_high_low(list_coins, interval, limit):
 		coin_symbol = item['symbol']
 		h_p = []
 		l_p = []
+		atr = [] # average true range
 		try:
 			for i in item['data']:
 				close_time = i[0]
@@ -239,7 +236,9 @@ def get_prices_high_low(list_coins, interval, limit):
 				quote_volume = i[6]
 				h_p.append(high_price)
 				l_p.append(low_price)
-			prices_low_high[coin_symbol] = {'symbol': coin_symbol, 'high_price': h_p, 'low_price': l_p, 'current_potential': 0.0}
+				atr.append(high_price-low_price)
+			prices_low_high[coin_symbol] = {'symbol': coin_symbol, 'high_price': h_p, 'low_price': l_p, 'current_potential': 0.0, 
+											'atr_percentage': ((sum(atr)/len(atr)) / close_price) * 100}
 		except Exception as e:
 			print(f'Ignoring {coin_symbol} data issue')
 			continue
@@ -287,15 +286,9 @@ def do_work():
 					current_range = high_price - last_price
 					current_potential = ((high_price / last_price) * 100) - 100
 					coins[coin]['current_potential'] = current_potential
+					current_drop = (100 * (high_price-last_price)) / high_price
 					movement = (low_price / range)
-					print(f'{coin} {current_potential:.2f}% {movement:.2f}%')
-
-					if MOVEMENT:
-						if profit_min < current_potential < profit_max and last_price < buy_below and movement >= (TAKE_PROFIT + 0.2) and coin not in held_coins_list:
-							current_potential_list.append(coins[coin])
-					else:
-						if profit_min < current_potential < profit_max and last_price < buy_below and coin not in held_coins_list:
-							current_potential_list.append(coins[coin])
+					print(f'{coin} CP:{current_potential:.2f}% CD:{current_drop:.2f}%  M:{movement:.2f}% ATRP:{coins[coin]["atr_percentage"]:.2f}%')
 
 					if block_info:
 						print(f'\nPrice:            ${last_price:.3f}\n'
@@ -309,10 +302,26 @@ def do_work():
 							# f'Potential profit before safety: {potential:.0f}%\n'
 							f'Buy above:        ${buy_above:.3f}\n'
 							f'Buy Below:        ${buy_below:.3f}\n'
-							f'Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}'
+							f'Potential Profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}\n'
+							f'Current Drop: {TextColors.TURQUOISE}{current_drop:.0f}%{TextColors.DEFAULT}'
 							# f'Max Profit {max_potential:.2f}%\n'
 							# f'Min Profit {min_potential:.2f}%\n'
 						)
+
+					if DROP_CALCULATION:
+						current_potential = current_drop
+
+					if MOVEMENT == "MOVEMENT":
+						if profit_min < current_potential < profit_max and last_price < buy_below and movement >= (TAKE_PROFIT + 0.2) and coin not in held_coins_list:
+							current_potential_list.append(coins[coin])
+					elif MOVEMENT ==  "ATR_MOVEMENT":
+						if profit_min < current_potential < profit_max and last_price < buy_below and coins[coin]["atr_percentage"] >= (TAKE_PROFIT) and coin not in held_coins_list:
+							current_potential_list.append(coins[coin])						
+					else:
+						if profit_min < current_potential < profit_max and last_price < buy_below and coin not in held_coins_list:
+							current_potential_list.append(coins[coin])
+
+
 
 			if current_potential_list:
 				# print(current_potential_list)
@@ -426,3 +435,7 @@ def do_work():
 			continue
 		except KeyboardInterrupt as ki:
 			continue
+
+if __name__ == '__main__':
+	# Testing 
+	do_work()
