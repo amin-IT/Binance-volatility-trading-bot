@@ -1,23 +1,28 @@
-import yaml
+"""Legacy config helpers (kept so older third-party signal modules keep working)."""
+
 import argparse
+import sys
+
+from bvt.config import ConfigError, config_path_from_env_or_argv, load_yaml
 
 
 def load_config(file):
+    """Return the raw YAML document as a dict (exits with a message on errors)."""
     try:
-
-        with open(file) as file:
-            return yaml.load(file, Loader=yaml.FullLoader)
-    except FileNotFoundError as fe:
-        exit(f'Could not find {file}')
-    
-    except Exception as e:
-        exit(f'Encountered exception...\n {e}')
+        return load_yaml(file)
+    except ConfigError as exc:
+        sys.exit(str(exc))
 
 
 def parse_args():
-    x = argparse.ArgumentParser()
-    x.add_argument('--debug', '-d', help="extra logging", action='store_true')
-    x.add_argument('--config', '-c', help="Path to config.yml")
-    x.add_argument('--creds', '-u', help="Path to creds file")
-    x.add_argument('--notimeout', help="Dont use timeout in prod", action="store_true")
-    return x.parse_args()
+    """Parse the bot's command line; unknown arguments are ignored."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--debug", "-d", action="store_true")
+    parser.add_argument("--config", "-c")
+    parser.add_argument("--creds", "-u")
+    parser.add_argument("--notimeout", action="store_true")
+    args, _ = parser.parse_known_args()
+    if not args.config:
+        # signal modules run in child processes: use the config the bot was started with
+        args.config = config_path_from_env_or_argv()
+    return args

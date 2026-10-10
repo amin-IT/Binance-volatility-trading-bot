@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "binance-volatility-trading-bot"
+dynamic = ["version"]
+description = "Binance trading bot that buys volatile coins and sells them on take profit / stop loss"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "python-binance>=1.0.37",
+    "PyYAML>=6.0",
+    "colorama>=0.4.6",
+    "tradingview-ta>=3.3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.15"]
+
+[project.scripts]
+bvt = "bvt.bot:main"
+bvt-sell-all = "bvt.sell_all:main"
+
+[tool.setuptools]
+packages = ["bvt", "signal_modules", "helpers"]
+
+[tool.setuptools.dynamic]
+version = { attr = "bvt.__version__" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "BLE", "ARG"]
+ignore = [
+    "B905",  # zip() without strict= is intentional for pairwise iteration
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG"]
+"signal_modules/*" = ["N"]
+"helpers/*" = ["BLE"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bvt", "signal_modules", "helpers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # raised inside python-binance's websocket code, which the bot does not use
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore::DeprecationWarning:binance.*",
+]

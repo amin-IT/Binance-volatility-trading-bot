@@ -1,0 +1,30 @@
+# secrets
+creds.yml
+.env
+
+# bot state and logs
+coins_bought.json
+test_coins_bought.json
+testnet_coins_bought.json
+trades.txt
+*.log
+
+# signal files written while the bot runs
+signals/*
+!signals/README.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
