@@ -1,97 +1,107 @@
-# These options apply to how the script will operate.
+# Binance Volatility Trading Bot configuration.
+# Most trading_options are re-read while the bot runs: save this file and the bot
+# picks up the change at its next price check. Settings marked (restart) need a restart.
+
 script_options:
-  # Switch between testnet and mainnet
-  # Setting this to False will use REAL funds, use at your own risk
-  # I don't advice to change TEST_MODE while the bot is running. I haven't tested what it does
-  # when the bot changes from test mode to use real money all of a sudden or vice versa
-  TEST_MODE: False
+  # True: simulate trades with live prices, no orders are sent (no API keys needed).
+  # False: trade with REAL money. Leave this True until you have tested your settings. (restart)
+  TEST_MODE: True
+
+  # With TEST_MODE: False, send the orders to the Binance Spot Testnet (test funds)
+  # instead of your real account. Needs testnet keys in creds.yml. (restart)
+  USE_TESTNET: False
+
+  # Append every buy and sell to LOG_FILE.
   LOG_TRADES: True
   LOG_FILE: 'trades.txt'
+
+  # Extra logging (same as starting the bot with --debug).
   DEBUG: False
 
-  # Set this to true if you are accessing binance from within the United States of America
-  # Need to change TLD
+  # Set to True if you use Binance.US (accounts in the United States). (restart)
   AMERICAN_USER: False
 
 
-# These options apply to the trading methods the script executes
 trading_options:
-
-  # select your base currency to use for trading (trade for example USDT pairs)
+  # Quote asset to trade with: the bot trades <COIN><PAIR_WITH> pairs, e.g. BTCUSDT. (restart)
   PAIR_WITH: USDT
 
-  # Total amount per trade (your base currency balance must be at least MAX_COINS * QUANTITY)
-  # Binance uses a minimum of 10 USDT per trade, add a bit extra to enable selling if the price drops.
-  # Recommended: no less than 12 USDT. Suggested: 15 or more.
+  # Amount of PAIR_WITH spent on each buy. Your balance must be at least MAX_COINS * QUANTITY.
+  # Binance's minimum order is around 5-10 USDT; use 15 or more so a coin can still be sold
+  # after its price drops.
   QUANTITY: 15
 
-  # List of trading pairs to exclude
-  # by default we're excluding the most popular fiat pairs
+  # Maximum number of coins held at the same time.
+  #  0: buy nothing, keep selling held coins at take profit / stop loss.
+  # -1: buy nothing and stop the bot once every held coin is sold.
+  MAX_COINS: 10
+
+  # Coins and pairs that are never bought. Each entry is matched against the base asset
+  # (e.g. USDC) and the full pair (e.g. EURUSDT). Fiat currencies and stablecoins are
+  # excluded because they barely move.
   FIATS:
     - EURUSDT
     - GBPUSDT
     - JPYUSDT
     - USDUSDT
-    - DOWN
-    - UP
+  EX_PAIRS: ['EUR', 'GBP', 'AUD', 'BRL', 'RUB', 'TRY', 'JPY', 'UAH', 'NGN', 'ARS', 'MXN', 'ZAR', 'PLN', 'RON', 'CZK',
+             'BIDR', 'IDRT', 'BVND', 'USD', 'USDT', 'USDC', 'BUSD', 'TUSD', 'USDP', 'PAX', 'DAI', 'FDUSD', 'AEUR',
+             'EURI', 'USD1', 'USDE', 'XUSD', 'VAI', 'SUSD', 'PAXG', 'WBTC', 'WBETH', 'BETH', 'BNSOL',
+             'SUPER', 'NCASH', 'RENBTC']
 
-  # Name of custom tickers list
-  #TICKERS_LIST: 'tickers.txt'
-  TICKERS_LIST: 'tickers_all_USDT.txt'
+  # Only trade the coins listed in TICKERS_LIST (one coin per line, e.g. BTC).
+  # With CUSTOM_LIST: False every PAIR_WITH pair on Binance is watched.
+  CUSTOM_LIST: True
+  TICKERS_LIST: 'tickers.txt'
 
-   # Maximum number of coints to hold
-   # Set this to zero if you want the bot to sell all the(possibly losing at the moment) coins at TP.
-   # If you want to avoid losses, then set your STOP_LOSS high enough
-   # Set this to -1 if you want the bot to terminate automatically when all the coins are sold
-  MAX_COINS: 10
-
-  # the amount of time in MINUTES to calculate the difference from the current price
+  # Window, in MINUTES, over which price rises are measured.
   TIME_DIFFERENCE: 1
 
-  # Numer of times to check for TP/SL during each TIME_DIFFERENCE Minimum 1
+  # Number of price checks per TIME_DIFFERENCE (minimum 1). Stop loss and take profit are
+  # also checked this often: 1 minute / 6 = every 10 seconds.
   RECHECK_INTERVAL: 6
 
-  # the difference in % between the first and second checks for the price.
+  # Buy a coin whose price is this many % above its lowest price of the last TIME_DIFFERENCE
+  # minutes. A very high value (e.g. 90) effectively disables these buys, so the bot only
+  # buys coins suggested by the signal modules.
   CHANGE_IN_PRICE: 90
 
-  # define in % when to sell a coin that's not making a profit, this has to be NEGATIVE number
+  # Sell a coin once it is this many % below its buy price. Must be NEGATIVE.
   STOP_LOSS: -3
 
-  # define in % when to take profit on a profitable coin
+  # Sell (or, with the trailing stop loss, start trailing) a coin once it is this many %
+  # above its buy price.
   TAKE_PROFIT: 1.0
 
-  # Use custom tickers.txt list for filtering pairs
-  CUSTOM_LIST: True
-
-  # whether to use trailing stop loss or not; default is True
+  # Trailing stop loss: once TAKE_PROFIT is reached the coin is not sold right away;
+  # instead the stop loss is moved to TRAILING_STOP_LOSS % below the price and follows the
+  # price up (it never moves down), and the coin is sold when the price falls back to it.
+  # Keep TRAILING_STOP_LOSS greater than TRAILING_TAKE_PROFIT.
   USE_TRAILING_STOP_LOSS: True
-
-  # when hit TAKE_PROFIT, move STOP_LOSS to TRAILING_STOP_LOSS percentage points below TAKE_PROFIT hence locking in profit
-  # when hit TAKE_PROFIT, move TAKE_PROFIT up by TRAILING_TAKE_PROFIT percentage points
-  # TRAILING_STOP_LOSS should be be greater than TRAILING_TAKE_PROFIT
   TRAILING_STOP_LOSS: 0.2
   TRAILING_TAKE_PROFIT: 0.1
 
-  # EX_PAIRS is a list of fiat currencies and margin symbols that I am excluding.
-  # Anything added here will be excluded from coin withdrawal and will not be sold.
-  EX_PAIRS: ['EUR', 'USD', 'GBP', 'BUSD', 'USDT', 'AUD', 'BRL', 'RUB', 'TRY', 'USDC', 'PAX', 'BIDR', 'DAI', 'IDRT',
-  'UAH', 'NGN', 'VAI', 'BVND', 'JPY', 'NCASH', 'UPUSDT', 'DOWNUSDT', 'USDTUP', 'USDTDOWN', 'BNBDOWN',
-  'EOSDOWN', 'XLMDOWN', 'UNIDOWN', 'LINKDOWN', 'FILDOWN', 'TRXDOWN', 'XRPDOWN', 'AAVEDOWN', 'SUSHIDOWN',
-  'XTZDOWN', 'ADADOWN', '1INCHDOWN', 'BTCDOWN', 'SXPDOWN', 'DOTDOWN', 'ETHDOWN', 'BCHDOWN', 'LTCDOWN',
-  'YFIDOWN', 'XTZUP', 'DOTUP', 'ADAUP', 'SUPER', 'AAVEUP', 'BTCUP', 'BNBUP', 'SXPUP', 'YFIUP', 'XLMUP',
-  'UNIUP', 'FILUP', '1INCHUP', 'LINKUP', 'LTCUP', 'ETHUP', 'SUSHIUP', 'EOSUP', 'XRPUP', 'TRXUP', 'BCHUP',
-  'RENBTC', 'B' ]
-
-  # Trading fee in % per trade.
-  # If using 0.075% (using BNB for fees) you must have BNB in your account to cover trading fees.
-  # If using BNB for fees, it MUST be enabled in your Binance 'Dashboard' page (checkbox).
+  # Trading fee in % per trade, used for the profit figures. 0.1 is the standard spot fee;
+  # 0.075 if you pay fees with BNB (enable it on Binance and keep some BNB in your account).
   TRADING_FEE: 0.075
 
+  # Liquidity filters, applied to every buy (signal modules included). 0 disables a filter.
+  # Illiquid coins can jump several % on a single trade and market orders on them fill at
+  # bad prices, so these protect against false signals and slippage.
+  # Maximum bid/ask spread in %.
+  MAX_SPREAD: 0.5
+  # Minimum traded volume over the last 24 hours, in PAIR_WITH (e.g. USDT).
+  MIN_24H_VOLUME: 1000000
+
+  # Signal modules to run alongside the bot (see signal_modules/__init__.py). (restart)
   SIGNALLING_MODULES:
     - pausebotmod
     - VolScan
-  #  - signalsamplemod
   #  - custsignalmod
+  #  - signalsamplemod
+  #  - the_snail
+  #  - rsi_mod
+  #  - rsi_stoch_signalmod_djcommie
+  #  - ta_indicator_signalmod_firewatch
   #  - os_pausebot_MAv2
-  #  - djcommie_signalsell_rsi_stoch
-  #  - djcommie_signalbuy_rsi_stoch
+  #  - amin_btc_pause

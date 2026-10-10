@@ -1,12 +1,23 @@
-# Ensure your keys and values have a space between them
-# Example:
-# Bad:
-#   access_key:myaccess_key
-# Good:
-#   access_key: myaccess_key 
-
+# Copy this file to creds.yml and fill in your API keys. Never share or commit creds.yml.
+# Keys are only needed for live trading (TEST_MODE: False); test mode uses public data.
+#
+# Create keys at https://www.binance.com/en/my/settings/api-management with
+# "Enable Spot & Margin Trading" and WITHOUT withdrawals. Restricting the key to your
+# IP address is strongly recommended.
+#
+# Instead of this file you can set the BINANCE_API_KEY and BINANCE_API_SECRET
+# environment variables (BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET for the testnet).
+#
+# Keep a space after each colon:
+#   Bad:  access_key:myaccess_key
+#   Good: access_key: myaccess_key
 
 prod:
   access_key: replace_me
   secret_key: replace_me
 
+# Keys for the Binance Spot Testnet (https://testnet.binance.vision), used when
+# TEST_MODE: False and USE_TESTNET: True.
+testnet:
+  access_key: replace_me
+  secret_key: replace_me
