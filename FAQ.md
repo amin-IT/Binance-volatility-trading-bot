@@ -11,7 +11,10 @@
 | `No API keys found` | Live trading needs keys: copy `creds.example.yml` to `creds.yml` and fill it in (keep a space after each colon), or set `BINANCE_API_KEY` / `BINANCE_API_SECRET`. Test mode needs no keys. |
 | `Account has insufficient balance` | Keep at least `MAX_COINS × QUANTITY` of `PAIR_WITH` free (not tied up in open orders), plus BNB for fees if you pay fees with BNB. |
 | `QUANTITY ... is below the minimum order value` | Binance's minimum order is around 5-10 USDT depending on the coin. Use a `QUANTITY` of 15 or more. |
-| `Removing X from the portfolio: ... below the minimum order size/value` | The coin is worth less than Binance's minimum order (or is no longer in your account), so it cannot be sold by the bot. Sell or convert the dust in the Binance app. |
+| `Removing X from the portfolio: ... below the minimum order size` | Less than Binance's minimum order size is left (or the coin is no longer in your account), so the bot cannot sell it. Convert the dust in the Binance app. |
+| `Cannot sell X yet (... worth less than the minimum order value ...)` | The position is currently worth less than Binance's minimum order. The bot keeps it and retries; if the price never recovers, sell it in the Binance app and remove it from `coins_bought.json`. |
+| `Could not read these entries of coins_bought.json` / `... is empty` | The bot refuses to start rather than forget coins. Fix the listed entries (each needs at least `bought_at` and `volume`) or delete the file if you hold no coins. |
+| `could not confirm order ... Check your Binance order history` | Binance did not confirm whether an order executed. Check your order history; if a buy went through, sell it in the app or add it to `coins_bought.json` as `"XYZUSDT": {"bought_at": <price>, "volume": <amount>}`. |
 | `N of M coins in tickers.txt have no tradable USDT pair` | Those coins were delisted or are excluded. Remove them from your tickers list. |
 | `Signal module 'x' not found` | The name in `SIGNALLING_MODULES` must match a file in `signal_modules/` (or the bot folder) without `.py`. |
 | Other Binance API errors | See the [Binance API error codes](https://developers.binance.com/docs/binance-spot-api-docs/errors). |

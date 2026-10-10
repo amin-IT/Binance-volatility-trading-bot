@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 import os
 import signal
@@ -32,15 +31,28 @@ from bvt.config import (
 )
 from bvt.console import Colors, profit_color, set_debug, setup_logging
 from bvt.credentials import CredentialsError, check_api_key, create_client, load_credentials, sync_time
-from bvt.exchange import NETWORK_ERRORS, Broker, DustError, Exchange, ExchangeError, LiveBroker, PaperBroker, Quote
-from bvt.portfolio import Portfolio, Position
+from bvt.exchange import (
+    NETWORK_ERRORS,
+    BelowMinimumError,
+    Broker,
+    DustError,
+    Exchange,
+    ExchangeError,
+    LiveBroker,
+    OrderStatusUnknown,
+    PaperBroker,
+    Quote,
+    sellable,
+)
+from bvt.portfolio import Portfolio, PortfolioError, Position
 from bvt.runner import SignalModuleRunner
 from bvt.signals import SIGNALS_DIR, clear_signals, pause_sources, read_signals
-from bvt.strategy import HOLD, SELL, TRAIL, PriceWindow, evaluate_exit, net_change, price_change, trade_profit
+from bvt.strategy import SELL, TRAIL, PriceWindow, evaluate_exit, net_change, price_change, trade_profit
 
 log = logging.getLogger("bvt")
 
 MAINNET_WAIT_SECONDS = 10
+CLOCK_SYNC_SECONDS = 3600
 
 
 @dataclass
@@ -98,7 +110,10 @@ class Bot:
         self._tickers = frozenset(load_tickers(config.tickers_list)) if config.custom_list else frozenset()
         self._detected: dict[str, datetime] = {}  # last time a coin crossed CHANGE_IN_PRICE
         self._blocked: dict[str, datetime] = {}  # recently sold / failed buys: no buying for TIME_DIFFERENCE
+        self._unconfirmed: set[str] = set()  # buys Binance could not confirm: not retried this session
+        self._below_minimum: set[str] = set()  # positions currently too small to sell (warned once)
         self._paused_since: datetime | None = None
+        self.order_in_flight = False  # a second Ctrl-C waits while an order is placed and recorded
         self._ticks = 0
         self._config_mtime = _mtime(config.path)
 
@@ -140,10 +155,13 @@ class Bot:
 
     def run(self) -> None:
         log.info("Press Ctrl-C to stop the bot")
-        next_tick = time.monotonic()
+        next_tick = last_sync = time.monotonic()
         while not self.stop_event.is_set():
-            self.reload_config()
             try:
+                self.reload_config()
+                if not self.config.test_mode and time.monotonic() - last_sync > CLOCK_SYNC_SECONDS:
+                    sync_time(self.client)
+                    last_sync = time.monotonic()
                 self.tick()
             except BinanceAPIException as exc:
                 if exc.code == -1021:
@@ -188,64 +206,94 @@ class Bot:
         sell_signals = set(read_signals("sell", self.signals_dir))
         changed = False
         for position in self.portfolio:
-            quote = quotes.get(position.symbol)
-            if quote is None:
-                log.warning("No price for %s, skipping it this check", position.symbol)
-                continue
-            price = quote.bid  # what a market sell would get
-            decision = evaluate_exit(position, price, self.config)
-            if position.symbol in sell_signals and decision.action != SELL:
-                decision = dataclasses.replace(decision, action=SELL, reason="sell signal")
-
-            if decision.action == SELL:
-                self._close(position, price, decision.reason, now)
-                continue
-            if decision.action == TRAIL:
-                if not position.trailing:
-                    log.info(
-                        "%s reached take profit (%+.2f%%): trailing stop armed at %+.2f%%",
-                        position.symbol,
-                        decision.change,
-                        decision.stop_loss,
-                    )
-                else:
-                    log.debug(
-                        "%s trailing: TP %.2f%%, SL %.2f%%", position.symbol, decision.take_profit, decision.stop_loss
-                    )
-                position.trailing = True
-            if decision.action in (TRAIL, HOLD) and (position.take_profit, position.stop_loss) != (
-                decision.take_profit,
-                decision.stop_loss,
-            ):
-                position.take_profit, position.stop_loss = decision.take_profit, decision.stop_loss
-                changed = True
+            # one bad position must never stop the others from being protected
+            try:
+                changed |= self._manage_position(position, quotes, sell_signals, now)
+            except Exception:  # noqa: BLE001
+                log.exception("Error while checking %s; trying again next check", position.symbol)
         if changed:
             self.portfolio.save()
 
+    def _manage_position(
+        self, position: Position, quotes: dict[str, Quote], sell_signals: set[str], now: datetime
+    ) -> bool:
+        """Sell or update one position. Returns True when its stored stops changed."""
+        quote = quotes.get(position.symbol)
+        if quote is None:
+            log.warning("No price for %s, skipping it this check", position.symbol)
+            return False
+        price = quote.bid  # what a market sell would get
+        decision = evaluate_exit(position, price, self.config)
+        if position.symbol in sell_signals and decision.action != SELL:
+            decision = dataclasses.replace(decision, action=SELL, reason="sell signal")
+
+        if decision.action == SELL:
+            self._close(position, price, decision.reason, now)
+            return False
+        changed = False
+        if decision.action == TRAIL:
+            if not position.trailing:
+                log.info(
+                    "%s reached take profit (%+.2f%%): trailing stop armed at %+.2f%%",
+                    position.symbol,
+                    decision.change,
+                    decision.stop_loss,
+                )
+                position.trailing = changed = True
+            else:
+                log.debug(
+                    "%s trailing: TP %.2f%%, SL %.2f%%", position.symbol, decision.take_profit, decision.stop_loss
+                )
+        if (position.take_profit, position.stop_loss) != (decision.take_profit, decision.stop_loss):
+            position.take_profit, position.stop_loss = decision.take_profit, decision.stop_loss
+            changed = True
+        return changed
+
     def _close(self, position: Position, price: float, reason: str, now: datetime) -> bool:
-        config = self.config
+        """Sell a position. Returns True if (part of) it was sold."""
+        config, symbol = self.config, position.symbol
+        self.order_in_flight = True
         try:
-            fill = self.broker.sell(position.symbol, Decimal(str(position.volume)), price)
-        except DustError as exc:
-            log.warning("Removing %s from the portfolio: %s", position.symbol, exc)
-            self.portfolio.remove(position.symbol)
-            return False
-        except ExchangeError as exc:
-            log.error("Could not sell %s: %s", position.symbol, exc)
-            return False
+            try:
+                fill = self.broker.sell(symbol, Decimal(str(position.volume)), price)
+            except DustError as exc:
+                log.warning("Removing %s from the portfolio: %s", symbol, exc)
+                self.portfolio.remove(symbol)
+                self._blocked[symbol] = now
+                return False
+            except BelowMinimumError as exc:
+                if symbol not in self._below_minimum:
+                    self._below_minimum.add(symbol)
+                    log.warning("Cannot sell %s yet (%s); will keep trying", symbol, exc)
+                return False
+            except ExchangeError as exc:
+                log.error("Could not sell %s: %s", symbol, exc)
+                return False
+            self._below_minimum.discard(symbol)
+
+            # a market order can fill partially (thin book, price limits): keep what is left if it can be sold
+            remaining = fill.unfilled
+            rule = self.exchange.rule(symbol)
+            if remaining > 0 and rule is not None and sellable(rule, remaining, price):
+                position.volume = float(remaining)
+                self.portfolio.save()
+                log.warning("Only part of %s was sold; %s left, will keep trying", symbol, _fmt(position.volume))
+            else:
+                self.portfolio.remove(symbol)
+                self._blocked[symbol] = now
+        finally:
+            self.order_in_flight = False
 
         quantity = float(fill.quantity)
         change = price_change(position.bought_at, fill.price)
         net = net_change(change, config.trading_fee)
         profit = trade_profit(position.bought_at, fill.price, quantity, config.trading_fee)
         self.stats.record(net, profit, now)
-        self._blocked[position.symbol] = now
-        self.portfolio.remove(position.symbol)
         log.info(
             "%sSold %s %s (%s): %s -> %s, %+.2f%% / %+.2f %s after fees%s",
             profit_color(net),
             _fmt(quantity),
-            position.symbol,
+            symbol,
             reason,
             _fmt(position.bought_at),
             _fmt(fill.price),
@@ -255,7 +303,7 @@ class Bot:
             Colors.DEFAULT,
         )
         self._trade_log(
-            f"Sell: {_fmt(quantity)} {position.symbol} - {_fmt(position.bought_at)} - {_fmt(fill.price)} "
+            f"Sell: {_fmt(quantity)} {symbol} - {_fmt(position.bought_at)} - {_fmt(fill.price)} "
             f"Profit: {profit:.2f} {net:.2f}% ({reason})"
         )
         return True
@@ -322,6 +370,9 @@ class Bot:
             if symbol in self.portfolio:
                 skip("%s: %s, but it is already held", symbol, reason)
                 continue
+            if symbol in self._unconfirmed:
+                skip("%s: %s, but an earlier order for it could not be confirmed", symbol, reason)
+                continue
             if len(self.portfolio) >= config.max_coins:
                 skip("%s: %s, but already holding the maximum of %d coins", symbol, reason, config.max_coins)
                 continue
@@ -362,22 +413,31 @@ class Bot:
         log.info(
             "%sBuying %s for %g %s: %s%s", Colors.BUY, symbol, config.quantity, config.pair_with, reason, Colors.DEFAULT
         )
+        self.order_in_flight = True
         try:
-            fill = self.broker.buy(symbol, config.quantity, price)
-        except ExchangeError as exc:
-            log.error("Could not buy %s: %s", symbol, exc)
-            self._blocked[symbol] = now
-            return
-        position = Position(
-            symbol=symbol,
-            orderid=fill.order_id,
-            timestamp=fill.timestamp,
-            bought_at=fill.price,
-            volume=float(fill.net_quantity),
-            take_profit=config.take_profit,
-            stop_loss=config.stop_loss,
-        )
-        self.portfolio.add(position)
+            try:
+                fill = self.broker.buy(symbol, config.quantity, price)
+            except OrderStatusUnknown as exc:
+                # it may have been bought: never buy it again blind, the user has to check
+                self._unconfirmed.add(symbol)
+                log.error("%s; %s will not be bought again until the bot is restarted", exc, symbol)
+                return
+            except ExchangeError as exc:
+                log.error("Could not buy %s: %s", symbol, exc)
+                self._blocked[symbol] = now
+                return
+            position = Position(
+                symbol=symbol,
+                orderid=fill.order_id,
+                timestamp=fill.timestamp,
+                bought_at=fill.price,
+                volume=float(fill.net_quantity),
+                take_profit=config.take_profit,
+                stop_loss=config.stop_loss,
+            )
+            self.portfolio.add(position)
+        finally:
+            self.order_in_flight = False
         log.info(
             "%sBought %s %s at %s (order %s)%s",
             Colors.BUY,
@@ -544,6 +604,9 @@ def connect(config: Config, creds_path: str) -> Client:
 def _install_signal_handlers(bot: Bot) -> None:
     def on_interrupt(signum, frame):  # noqa: ARG001
         if bot.stop_event.is_set():
+            if bot.order_in_flight:
+                log.warning("Finishing the current order first...")
+                return
             raise KeyboardInterrupt  # second Ctrl-C: stop right away
         bot.interrupted = True
         bot.stop_event.set()
@@ -575,14 +638,11 @@ def main(argv: list[str] | None = None) -> None:
         client = connect(config, args.creds or DEFAULT_CREDS_FILE)
         bot = Bot(config, client, force_debug=args.debug)
         bot.warn_unknown_tickers()
-    except (ConfigError, CredentialsError) as exc:
+    except (ConfigError, CredentialsError, PortfolioError) as exc:
         log.error("%s", exc)
         sys.exit(1)
     except (BinanceAPIException, *NETWORK_ERRORS) as exc:
         log.error("Could not connect to Binance: %s", exc)
-        sys.exit(1)
-    except (OSError, json.JSONDecodeError) as exc:
-        log.error("Could not read the portfolio file %s: %s", config.portfolio_file, exc)
         sys.exit(1)
 
     log.info("Binance Volatility Trading Bot %s", __version__)
@@ -615,6 +675,8 @@ def main(argv: list[str] | None = None) -> None:
         bot.interrupted = True
     finally:
         signal.signal(signal.SIGINT, signal.default_int_handler)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
         runner.stop()
 
     if bot.interrupted and bot.portfolio and sys.stdin is not None and sys.stdin.isatty():

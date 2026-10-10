@@ -50,10 +50,14 @@ and current versions of its dependencies. You still start it with
   filters, breaking `filters[2]`); buys spend exactly `QUANTITY` via `quoteOrderQty`; the
   minimum order value (`NOTIONAL`) is checked.
 * Sells never exceed the coin balance, so fees paid in the coin no longer cause
-  "insufficient balance" errors; unsellable dust is dropped from the portfolio instead of
-  failing forever.
-* If an order request times out the bot asks Binance whether it executed instead of
-  losing track of it.
+  "insufficient balance" errors. Coins below the minimum order size are dropped from the
+  portfolio instead of failing forever; positions only temporarily worth less than the
+  minimum order value (e.g. during a price wick) are kept and retried.
+* Partially filled sells keep the unsold remainder as a position.
+* If an order request times out, or Binance answers with a server error, the bot asks
+  Binance whether the order executed instead of losing track of it. A buy that cannot be
+  confirmed is reported and that coin is not bought again until the bot restarts.
+* Clock drift that develops while the bot runs is corrected automatically (error -1021).
 * Real fill prices and commissions are recorded instead of the last ticker price.
 * While paused the bot no longer hammers the Binance API in a busy loop.
 * The bot no longer crashes when BNB is missing from the tickers list, when a coin is
@@ -62,8 +66,11 @@ and current versions of its dependencies. You still start it with
 * `USDTBRL`-style pairs are no longer picked up when `CUSTOM_LIST: False`.
 * Session profit is tracked even with `LOG_TRADES: False`; profit and win/loss figures
   include fees correctly.
-* Ctrl-C finishes the current check before stopping (a second Ctrl-C forces it) so an
-  order is never left out of the portfolio file; the portfolio is written atomically.
+* Ctrl-C finishes the current check before stopping (a second Ctrl-C forces it, but never
+  while an order is being placed and recorded). The portfolio is written atomically and
+  flushed to disk, and an unreadable portfolio file stops the bot at startup instead of
+  silently forgetting coins. An error in one position no longer stops the others from being
+  checked, and a config file saved with the wrong encoding no longer crashes the bot.
 * Signal modules are stopped reliably on exit and restarted if they crash; stale signal
   files are cleared at startup; signal files are read atomically.
 * Signal modules no longer create API clients or parse arguments at import, batch their

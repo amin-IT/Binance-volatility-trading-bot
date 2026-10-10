@@ -61,6 +61,7 @@ class FakeClient:
         self.orders: list[dict] = []
         self.timestamp_offset = 0
         self.fail_next_order: Exception | None = None
+        self.sell_fill_ratio = Decimal("1")  # < 1 simulates a market sell that fills partially and expires
         self.klines: dict[tuple[str, str], list[list]] = {}
         self._ids = itertools.count(1)
 
@@ -127,9 +128,9 @@ class FakeClient:
                 qty = Decimal(params["quantity"])
         else:
             price = Decimal(str(bid))
-            qty = Decimal(params["quantity"])
-            if qty > self.balances.get(base, Decimal("0")):
+            if Decimal(params["quantity"]) > self.balances.get(base, Decimal("0")):
                 raise APIError(-2010, "Account has insufficient balance for requested action.")
+            qty = (Decimal(params["quantity"]) * self.sell_fill_ratio // step) * step
         commission = (qty * Decimal("0.001")) if self.commission_in_base and params["side"] == "BUY" else Decimal("0")
         if params["side"] == "BUY":
             self.balances[base] = self.balances.get(base, Decimal("0")) + qty - commission
@@ -142,8 +143,9 @@ class FakeClient:
             "orderId": next(self._ids),
             "clientOrderId": params.get("newClientOrderId"),
             "transactTime": int(time.time() * 1000),
-            "status": "FILLED",
+            "status": "FILLED" if params["side"] == "BUY" or self.sell_fill_ratio == 1 else "EXPIRED",
             "side": params["side"],
+            "origQty": params.get("quantity") or str(qty),
             "executedQty": str(qty),
             "cummulativeQuoteQty": str(qty * price),
             "fills": [
