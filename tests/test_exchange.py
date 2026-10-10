@@ -5,10 +5,12 @@ import requests
 from fakes import APIError, FakeClient, symbol_info
 
 from bvt.exchange import (
+    BelowMinimumError,
     DustError,
     Exchange,
     ExchangeError,
     LiveBroker,
+    OrderStatusUnknown,
     PaperBroker,
     Quote,
     SymbolRules,
@@ -85,8 +87,10 @@ def test_paper_broker_fills_at_given_price_with_step_rounding():
         broker.buy("XRPUSDT", 1, 0.7)
     with pytest.raises(ExchangeError, match="not available"):
         broker.buy("OLDUSDT", 15, 1)
+    with pytest.raises(BelowMinimumError):
+        broker.sell("XRPUSDT", Decimal("2"), 0.7)  # 1.4 USDT is below the 5 USDT minimum: retry later
     with pytest.raises(DustError):
-        broker.sell("XRPUSDT", Decimal("2"), 0.7)  # 1.4 USDT is below the 5 USDT minimum
+        broker.sell("XRPUSDT", Decimal("0.5"), 0.7)  # below the 1 XRP step: can never be sold
 
 
 def test_live_buy_spends_quote_amount_and_deducts_commission_in_coin():
@@ -148,8 +152,93 @@ def test_live_order_that_never_arrived(monkeypatch):
         raise requests.ReadTimeout("lost before reaching Binance")
 
     client.create_order = time_out
-    with pytest.raises(ExchangeError, match="was not placed"):
+    with pytest.raises(ExchangeError, match="was not placed") as error:
         LiveBroker(Exchange(client)).buy("BTCUSDT", 15, 1)
+    assert not isinstance(error.value, OrderStatusUnknown)
+
+
+@pytest.mark.parametrize(
+    "error", [APIError(-1, "Internal error", 503), APIError(-1007, "Timeout waiting for response")]
+)
+def test_server_error_after_execution_is_looked_up(monkeypatch, error):
+    monkeypatch.setattr("bvt.exchange.time.sleep", lambda s: None)
+    client = FakeClient(spread=0)
+    client.set_price("BTCUSDT", 100)
+    real_create = client.create_order
+
+    def execute_then_fail(**params):
+        real_create(**params)
+        raise error
+
+    client.create_order = execute_then_fail
+    fill = LiveBroker(Exchange(client)).buy("BTCUSDT", 15, 100)
+    assert fill.quantity == Decimal("0.15")
+
+
+def test_lookup_retries_orders_still_in_flight(monkeypatch):
+    monkeypatch.setattr("bvt.exchange.time.sleep", lambda s: None)
+    client = FakeClient(spread=0)
+    client.set_price("BTCUSDT", 100)
+    real_create, real_get = client.create_order, client.get_order
+    pending = []
+
+    def lost_response(**params):
+        pending.append(params)
+        raise requests.ReadTimeout("no response")
+
+    def get_order(**params):
+        if pending:  # the first lookup does not see it yet, then it executes
+            real_create(**pending.pop())
+            raise APIError(-2013, "Order does not exist.")
+        return real_get(**params)
+
+    client.create_order, client.get_order = lost_response, get_order
+    assert LiveBroker(Exchange(client)).buy("BTCUSDT", 15, 100).quantity == Decimal("0.15")
+
+
+def test_unconfirmable_order_is_reported_as_unknown(monkeypatch):
+    monkeypatch.setattr("bvt.exchange.time.sleep", lambda s: None)
+    client = FakeClient()
+
+    def down(**params):
+        raise requests.ConnectionError("down")
+
+    client.create_order = client.get_order = down
+    with pytest.raises(OrderStatusUnknown, match="Check your Binance order history"):
+        LiveBroker(Exchange(client)).buy("BTCUSDT", 15, 1)
+
+
+def test_clock_drift_is_resynced_and_the_request_retried(monkeypatch):
+    client = FakeClient(spread=0)
+    client.set_price("BTCUSDT", 100)
+    client.balances["BTC"] = Decimal("1")
+    synced = []
+    monkeypatch.setattr("bvt.exchange.sync_time", lambda c: synced.append(c))
+    client.fail_next_order = APIError(-1021, "Timestamp for this request is outside of the recvWindow.")
+    fill = LiveBroker(Exchange(client)).sell("BTCUSDT", Decimal("0.5"), 100)
+    assert synced == [client]
+    assert fill.quantity == Decimal("0.5")
+
+
+def test_network_error_reading_the_balance_is_an_exchange_error():
+    client = FakeClient()
+
+    def down(**params):
+        raise requests.ConnectionError("down")
+
+    client.get_asset_balance = down
+    with pytest.raises(ExchangeError, match="balance"):
+        LiveBroker(Exchange(client)).sell("BTCUSDT", Decimal("1"), 100)
+
+
+def test_partial_fill_reports_the_unfilled_quantity():
+    client = FakeClient(spread=0)
+    client.set_price("ETHUSDT", 2000)
+    client.balances["ETH"] = Decimal("1")
+    client.sell_fill_ratio = Decimal("0.25")
+    fill = LiveBroker(Exchange(client)).sell("ETHUSDT", Decimal("1"), 2000)
+    assert fill.quantity == Decimal("0.25")
+    assert fill.unfilled == Decimal("0.75")
 
 
 def test_unfilled_order_raises():

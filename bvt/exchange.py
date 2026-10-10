@@ -14,6 +14,8 @@ import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+from bvt.credentials import sync_time
+
 log = logging.getLogger(__name__)
 
 BUY = "BUY"
@@ -28,7 +30,19 @@ class ExchangeError(Exception):
 
 
 class DustError(ExchangeError):
-    """A position cannot be sold because it is below the exchange minimums (or was moved away)."""
+    """A position cannot be sold: less than the minimum order size is left on the account."""
+
+
+class BelowMinimumError(ExchangeError):
+    """A sale is currently worth less than the minimum order value; it may succeed later."""
+
+
+class OrderStatusUnknown(ExchangeError):
+    """An order was sent but Binance could not confirm whether it executed."""
+
+
+# Binance: 5xx replies, -1006 and -1007 mean the order's execution status is unknown.
+_STATUS_UNKNOWN_CODES = (-1006, -1007)
 
 
 def round_step(quantity: Decimal, step: Decimal) -> Decimal:
@@ -125,6 +139,11 @@ class Fill:
     quantity: Decimal  # executed quantity
     net_quantity: Decimal  # quantity actually received (commission paid in the coin deducted)
     timestamp: int  # milliseconds since epoch
+    requested: Decimal | None = None  # quantity asked for, when known (a market order can fill partially)
+
+    @property
+    def unfilled(self) -> Decimal:
+        return max((self.requested or self.quantity) - self.quantity, Decimal("0"))
 
 
 class Exchange:
@@ -206,14 +225,22 @@ def _require_rule(exchange: Exchange, symbol: str) -> SymbolRules:
     return rule
 
 
+def sellable(rule: SymbolRules, quantity: Decimal, last_price: float) -> bool:
+    """Whether ``quantity`` can currently be sold with a market order."""
+    qty = round_step(quantity, rule.step_size)
+    return qty > 0 and qty >= rule.min_qty and qty * Decimal(str(last_price)) >= rule.min_notional
+
+
 def _check_sell_quantity(rule: SymbolRules, quantity: Decimal, last_price: float) -> Decimal:
     qty = round_step(quantity, rule.step_size)
     if qty <= 0 or qty < rule.min_qty:
         raise DustError(f"{format_decimal(qty)} {rule.base_asset} is below the minimum order size")
     if qty * Decimal(str(last_price)) < rule.min_notional:
-        raise DustError(
+        # Binance checks the notional against a 5 minute average price, so a sudden wick can make
+        # this check fail while the exchange would still accept the order later: keep retrying.
+        raise BelowMinimumError(
             f"{format_decimal(qty)} {rule.base_asset} is worth less than the minimum order value "
-            f"of {format_decimal(rule.min_notional)} {rule.quote_asset}"
+            f"of {format_decimal(rule.min_notional)} {rule.quote_asset} at the current price"
         )
     return qty
 
@@ -277,43 +304,58 @@ class LiveBroker:
     def sell(self, symbol: str, quantity: Decimal, last_price: float) -> Fill:
         rule = _require_rule(self.exchange, symbol)
         try:
-            balance = self.client.get_asset_balance(asset=rule.base_asset)
-        except BinanceAPIException as exc:
-            raise ExchangeError(f"could not read {rule.base_asset} balance: {exc}") from None
+            balance = self._signed(self.client.get_asset_balance, asset=rule.base_asset)
+        except (BinanceAPIException, *NETWORK_ERRORS) as exc:
+            raise ExchangeError(f"could not read the {rule.base_asset} balance: {exc}") from None
         free = Decimal(str((balance or {}).get("free") or "0"))
         # Never try to sell more than we own: fees paid in the coin, or manual trades, reduce the balance.
         qty = _check_sell_quantity(rule, min(quantity, free), last_price)
         params = {"symbol": symbol, "side": SELL, "type": "MARKET", "quantity": format_decimal(qty)}
         return self._place(params, rule, last_price)
 
+    def _signed(self, method, **params):
+        """Call a signed endpoint; if the clock drifted (-1021), resync it and retry once."""
+        try:
+            return method(**params)
+        except BinanceAPIException as exc:
+            if exc.code != -1021:
+                raise
+            log.warning("Binance rejected the request time (%s); resyncing the clock and retrying", exc.message)
+            sync_time(self.client)
+            return method(**params)
+
     def _place(self, params: dict[str, Any], rule: SymbolRules, last_price: float) -> Fill:
         client_order_id = f"bvt-{uuid.uuid4().hex[:24]}"
         params = {**params, "newClientOrderId": client_order_id, "newOrderRespType": "FULL"}
+        side = params["side"]
         try:
-            order = self.client.create_order(**params)
+            order = self._signed(self.client.create_order, **params)
         except BinanceAPIException as exc:
-            raise ExchangeError(f"{params['side']} {rule.symbol} rejected: {exc}") from None
-        except NETWORK_ERRORS as exc:
+            if (exc.status_code or 0) < 500 and exc.code not in _STATUS_UNKNOWN_CODES:
+                raise ExchangeError(f"{side} {rule.symbol} rejected: {exc}") from None
             # The order may still have executed; ask Binance before giving up.
-            log.warning("No response while placing %s %s (%s); checking order status", params["side"], rule.symbol, exc)
+            log.warning("Execution status of %s %s unknown (%s); checking order status", side, rule.symbol, exc)
             order = self._lookup(rule.symbol, client_order_id)
-        return parse_order(order, rule, params["side"], last_price)
+        except NETWORK_ERRORS as exc:
+            log.warning("No response while placing %s %s (%s); checking order status", side, rule.symbol, exc)
+            order = self._lookup(rule.symbol, client_order_id)
+        return parse_order(order, rule, side, last_price)
 
     def _lookup(self, symbol: str, client_order_id: str) -> dict[str, Any]:
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(5):
             time.sleep(1 + attempt)
             try:
-                return self.client.get_order(symbol=symbol, origClientOrderId=client_order_id)
+                return self._signed(self.client.get_order, symbol=symbol, origClientOrderId=client_order_id)
             except BinanceAPIException as exc:
-                if exc.code == -2013:  # order does not exist: it never reached the matching engine
-                    raise ExchangeError(f"order for {symbol} was not placed") from None
-                last_error = exc
+                last_error = exc  # -2013 "order does not exist" may mean it is still in flight: ask again
             except NETWORK_ERRORS as exc:
                 last_error = exc
-        raise ExchangeError(
+        if isinstance(last_error, BinanceAPIException) and last_error.code == -2013:
+            raise ExchangeError(f"order for {symbol} was not placed")
+        raise OrderStatusUnknown(
             f"could not confirm order {client_order_id} for {symbol} ({last_error}). "
-            "Check your Binance order history and update the portfolio file if it was filled."
+            "Check your Binance order history; if it was filled, sell or record the coin yourself."
         )
 
 
@@ -336,4 +378,5 @@ def parse_order(order: dict[str, Any], rule: SymbolRules, side: str, fallback_pr
             Decimal("0"),
         )
     timestamp = order.get("transactTime") or order.get("updateTime") or order.get("time") or int(time.time() * 1000)
-    return Fill(rule.symbol, side, order.get("orderId", ""), price, executed, net, int(timestamp))
+    requested = Decimal(str(order["origQty"])) if order.get("origQty") else None
+    return Fill(rule.symbol, side, order.get("orderId", ""), price, executed, net, int(timestamp), requested)

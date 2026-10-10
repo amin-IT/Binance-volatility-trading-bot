@@ -109,6 +109,17 @@ def test_missing_and_broken_files(tmp_path):
         parse_config(["not", "a", "mapping"])
 
 
+def test_badly_encoded_files_raise_config_errors(tmp_path):
+    config = tmp_path / "config.yml"
+    config.write_bytes("trading_options:\n  # Gewinn in \u20ac\n  QUANTITY: 15\n".encode("cp1252"))
+    with pytest.raises(ConfigError, match="UTF-8"):
+        load_config(config)
+    tickers = tmp_path / "tickers.txt"
+    tickers.write_bytes("BTC\n\u00c9TH\n".encode("utf-16"))
+    with pytest.raises(ConfigError, match="UTF-8"):
+        load_tickers(tickers)
+
+
 def test_exclusions_match_base_asset_or_pair():
     config = Config(fiats=("EURUSDT",), ex_pairs=("USDC",))
     assert config.is_excluded("EURUSDT")

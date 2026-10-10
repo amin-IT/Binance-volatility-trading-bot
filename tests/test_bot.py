@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from decimal import Decimal
 
 import pytest
 import requests
@@ -153,15 +154,84 @@ def test_live_mode_places_real_orders_and_sells_what_is_on_the_account(write_con
     assert client.orders[1]["params"]["quantity"] == "27"  # never more than the account holds
 
 
-def test_failed_sell_is_retried_and_dust_is_dropped(make_bot, client, clock, workdir, caplog):
-    bot = make_bot()
-    tick(bot, client, clock, BTCUSDT=100)
-    tick(bot, client, clock, BTCUSDT=104)
-    bot.portfolio.get("BTCUSDT").volume = 0.00001  # worth 0.001 USDT, below the minimum order
+def test_dust_is_dropped_but_a_temporarily_small_position_is_kept(make_bot, client, clock, workdir, caplog):
+    bot = make_bot(MAX_COINS=5)
+    tick(bot, client, clock, BTCUSDT=100, XRPUSDT=10)
+    tick(bot, client, clock, BTCUSDT=104, XRPUSDT=10.4)
+    bot.portfolio.get("BTCUSDT").volume = 0.000001  # below the 0.00001 step: can never be sold
+    bot.portfolio.get("XRPUSDT").volume = 1.0  # one XRP: fine at 10 USDT, too small during a wick
     with caplog.at_level(logging.WARNING):
-        tick(bot, client, clock, BTCUSDT=90)
+        tick(bot, client, clock, BTCUSDT=90, XRPUSDT=4)
     assert "Removing BTCUSDT from the portfolio" in caplog.text
-    assert "BTCUSDT" not in Portfolio.load(workdir / "test_coins_bought.json")
+    assert "Cannot sell XRPUSDT yet" in caplog.text
+    assert set(Portfolio.load(workdir / "test_coins_bought.json").positions) == {"XRPUSDT"}
+    (workdir / "signals" / "mod.exs").write_text("BTCUSDT\n")
+    tick(bot, client, clock, BTCUSDT=105)  # dropped coins are not bought straight back
+    assert "BTCUSDT" not in bot.portfolio
+    tick(bot, client, clock, XRPUSDT=9.5)  # the wick is over: the stop loss sale goes through
+    assert "XRPUSDT" not in bot.portfolio
+
+
+def test_partial_sell_keeps_the_rest(write_config, clock, workdir):
+    from fakes import FakeClient
+
+    client = FakeClient()
+    bot = Bot(
+        load_config(write_config(script={"TEST_MODE": False})), client, clock=clock, signals_dir=workdir / "signals"
+    )
+    tick(bot, client, clock, ETHUSDT=2000)
+    tick(bot, client, clock, ETHUSDT=2080)
+    bought = bot.portfolio.get("ETHUSDT").volume
+    client.sell_fill_ratio = Decimal("0.5")
+    tick(bot, client, clock, ETHUSDT=1990)  # stop loss, but only half fills
+    assert bot.portfolio.get("ETHUSDT").volume == pytest.approx(bought / 2, abs=0.0001)
+    client.sell_fill_ratio = Decimal("1")
+    tick(bot, client, clock, ETHUSDT=1990)
+    assert "ETHUSDT" not in bot.portfolio
+    assert bot.stats.trades == 2
+
+
+def test_unconfirmed_buy_is_never_retried(write_config, clock, workdir, monkeypatch, caplog):
+    from fakes import FakeClient
+
+    monkeypatch.setattr("bvt.exchange.time.sleep", lambda s: None)
+    client = FakeClient()
+    bot = Bot(
+        load_config(write_config(script={"TEST_MODE": False})), client, clock=clock, signals_dir=workdir / "signals"
+    )
+
+    def down(**params):
+        raise requests.ConnectionError("down")
+
+    client.create_order = client.get_order = down
+    tick(bot, client, clock, BTCUSDT=100)
+    with caplog.at_level(logging.ERROR):
+        tick(bot, client, clock, BTCUSDT=104)
+    assert "will not be bought again until the bot is restarted" in caplog.text
+    client.create_order = lambda **params: pytest.fail("must not place another order")
+    for _ in range(3):
+        clock.advance(120)
+        (workdir / "signals" / "mod.exs").write_text("BTCUSDT\n")
+        tick(bot, client, clock, BTCUSDT=110)
+    assert "BTCUSDT" not in bot.portfolio
+
+
+def test_one_failing_position_does_not_block_the_others(make_bot, client, clock, caplog):
+    bot = make_bot(MAX_COINS=5)
+    tick(bot, client, clock, BTCUSDT=100, ETHUSDT=100)
+    tick(bot, client, clock, BTCUSDT=104, ETHUSDT=104)
+    real_sell = bot.broker.sell
+
+    def broken_for_btc(symbol, quantity, price):
+        if symbol == "BTCUSDT":
+            raise RuntimeError("unexpected")
+        return real_sell(symbol, quantity, price)
+
+    bot.broker.sell = broken_for_btc
+    with caplog.at_level(logging.ERROR):
+        tick(bot, client, clock, BTCUSDT=90, ETHUSDT=90)
+    assert "Error while checking BTCUSDT" in caplog.text
+    assert set(bot.portfolio.positions) == {"BTCUSDT"}  # ETH was still sold
 
 
 def test_portfolio_survives_a_restart(make_bot, client, clock):
@@ -198,6 +268,27 @@ def test_network_errors_do_not_stop_the_loop(make_bot, client, clock, caplog):
         bot.run()
     assert "Network error talking to Binance" in caplog.text
     assert calls["n"] == 2
+
+
+def test_unreadable_config_during_run_does_not_stop_the_bot(make_bot, client, clock, workdir, caplog):
+    bot = make_bot()
+    path = workdir / "config.yml"
+    path.write_bytes(path.read_bytes() + "# \u20ac\n".encode("cp1252"))  # saved by an editor as ANSI
+    os.utime(path, (time.time() + 5, time.time() + 5))
+    real_tick, ticks = bot.tick, []
+
+    def counting_tick():
+        ticks.append(1)
+        real_tick()
+        if len(ticks) == 2:
+            bot.stop_event.set()
+
+    bot.tick = counting_tick
+    bot.config = bot.config.__class__(**{**bot.config.__dict__, "recheck_interval": 600})
+    with caplog.at_level(logging.ERROR):
+        bot.run()
+    assert len(ticks) == 2
+    assert "save it with UTF-8 encoding" in caplog.text
 
 
 def test_config_is_reloaded_while_running(make_bot, client, clock, workdir, caplog):

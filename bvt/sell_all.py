@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 
@@ -13,6 +12,7 @@ from bvt.config import DEFAULT_CONFIG_FILE, DEFAULT_CREDS_FILE, ConfigError, bui
 from bvt.console import Colors, setup_logging
 from bvt.credentials import CredentialsError
 from bvt.exchange import NETWORK_ERRORS
+from bvt.portfolio import PortfolioError
 
 log = logging.getLogger("bvt")
 
@@ -27,14 +27,11 @@ def main(argv: list[str] | None = None) -> None:
         config = load_config(args.config or DEFAULT_CONFIG_FILE)
         client = connect(config, args.creds or DEFAULT_CREDS_FILE)
         bot = Bot(config, client)
-    except (ConfigError, CredentialsError) as exc:
+    except (ConfigError, CredentialsError, PortfolioError) as exc:
         log.error("%s", exc)
         sys.exit(1)
     except (BinanceAPIException, *NETWORK_ERRORS) as exc:
         log.error("Could not connect to Binance: %s", exc)
-        sys.exit(1)
-    except (OSError, json.JSONDecodeError) as exc:
-        log.error("Could not read the portfolio file %s: %s", config.portfolio_file, exc)
         sys.exit(1)
 
     if not bot.portfolio:

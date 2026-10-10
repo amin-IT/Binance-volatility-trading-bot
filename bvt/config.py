@@ -243,6 +243,10 @@ def load_yaml(path: str | os.PathLike) -> Any:
         raise ConfigError(f"Could not find {path}") from None
     except yaml.YAMLError as exc:
         raise ConfigError(f"Could not parse {path}:\n{exc}") from None
+    except UnicodeDecodeError:
+        raise ConfigError(f"Could not read {path}: save it with UTF-8 encoding") from None
+    except OSError as exc:
+        raise ConfigError(f"Could not read {path}: {exc}") from None
 
 
 def load_config(path: str | os.PathLike = DEFAULT_CONFIG_FILE) -> Config:
@@ -255,6 +259,10 @@ def load_tickers(path: str | os.PathLike) -> list[str]:
         text = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         raise ConfigError(f"Could not find tickers list {path}") from None
+    except UnicodeDecodeError:
+        raise ConfigError(f"Could not read tickers list {path}: save it with UTF-8 encoding") from None
+    except OSError as exc:
+        raise ConfigError(f"Could not read tickers list {path}: {exc}") from None
     tickers: list[str] = []
     for line in text.splitlines():
         ticker = line.split("#", 1)[0].strip().upper()

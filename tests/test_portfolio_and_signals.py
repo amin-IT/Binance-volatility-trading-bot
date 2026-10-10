@@ -1,6 +1,8 @@
 import json
 
-from bvt.portfolio import Portfolio, Position, held_symbols
+import pytest
+
+from bvt.portfolio import Portfolio, PortfolioError, Position, held_symbols
 from bvt.signals import clear_signals, is_paused, pause_sources, read_signals, set_paused, write_signals
 
 
@@ -40,17 +42,36 @@ def test_legacy_portfolio_format(tmp_path):
                     "take_profit": 2.1,
                     "stop_loss": 1.9,  # positive stop loss = trailing armed
                 },
-                "BROKEN": {"symbol": "BROKEN"},
+                "XRPUSDT": {"bought_at": 0.5, "volume": 30},  # added by hand: only the essentials
             }
         )
     )
     portfolio = Portfolio.load(path)
-    btc, eth = portfolio.get("BTCUSDT"), portfolio.get("ETHUSDT")
+    btc, eth, xrp = portfolio.get("BTCUSDT"), portfolio.get("ETHUSDT"), portfolio.get("XRPUSDT")
     assert btc.bought_at == 35000.10 and btc.timestamp == 1625000000500 and not btc.trailing
     assert eth.trailing
-    assert "BROKEN" not in portfolio
-    assert held_symbols(path) == {"BTCUSDT", "ETHUSDT"}
+    assert xrp.symbol == "XRPUSDT" and not xrp.trailing
+    assert held_symbols(path) == {"BTCUSDT", "ETHUSDT", "XRPUSDT"}
     assert held_symbols(tmp_path / "missing.json") == set()
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("", "is empty"),
+        ("[]", "JSON object"),
+        ("null", "JSON object"),
+        ("{not json", "Could not read"),
+        ('{"BTCUSDT": {"symbol": "BTCUSDT"}}', "fix or remove them"),
+        ('{"BTCUSDT": {"bought_at": 0, "volume": 1}}', "greater than 0"),
+    ],
+)
+def test_unreadable_portfolio_is_refused_not_silently_emptied(tmp_path, content, message):
+    path = tmp_path / "coins_bought.json"
+    path.write_text(content)
+    with pytest.raises(PortfolioError, match=message):
+        Portfolio.load(path)
+    assert path.read_text() == content, "the file must be left untouched"
 
 
 def test_buy_and_sell_signals_are_read_in_order_and_consumed(tmp_path):
